@@ -1,0 +1,336 @@
+// services/api_service.dart
+import 'dart:convert';
+import 'dart:async';
+import 'dart:math' show cos, sqrt, asin;
+import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../models/request_model.dart';
+import '../models/user_model.dart' as local_models;
+import '../models/transaction_model.dart';
+import 'auth_service.dart';
+import 'location_service.dart';
+import '../config/env.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:geolocator/geolocator.dart';
+
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+class ApiService with ChangeNotifier {
+  static const String baseUrl = 'http://10.0.2.2:8000/api';
+  final AuthService authService;
+  final SupabaseClient _supabase = Supabase.instance.client;
+
+  ApiService({required this.authService});
+
+  Future<String> _getAuthToken() async {
+    final token = await authService.getToken();
+    if (token == null) {
+      throw const FormatException('Not authenticated');
+    }
+    return token;
+  }
+
+  Future<local_models.User> getCurrentUser() async {
+    try {
+      final token = await _getAuthToken();
+      final response = await http.get(
+        Uri.parse('$baseUrl/user/me'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return local_models.User.fromJson(json.decode(response.body));
+      } else {
+        throw http.ClientException(
+          'Failed to load user data: ${response.statusCode}',
+          Uri.parse('$baseUrl/user/me'),
+        );
+      }
+    } on FormatException {
+      rethrow;
+    } catch (e) {
+      debugPrint('Error in getCurrentUser: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> updateUserLocation(double latitude, double longitude) async {
+    try {
+      final token = await _getAuthToken();
+      final response = await http.post(
+        Uri.parse('$baseUrl/user/location'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({
+          'latitude': latitude,
+          'longitude': longitude,
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        throw http.ClientException(
+          'Failed to update location: ${response.statusCode}',
+          Uri.parse('$baseUrl/user/location'),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error in updateUserLocation: $e');
+      rethrow;
+    }
+  }
+
+  // Create a new request
+  Future<Request> createRequest({
+    required double amount,
+    required String type,
+  }) async {
+    try {
+      final user = _supabase.auth.currentUser;
+      if (user == null) throw Exception('Not authenticated');
+      
+      // Get current location
+      final locationService = Provider.of<LocationService>(
+        _getContext(),
+        listen: false,
+      );
+      final position = await locationService.getCurrentLocation();
+      if (position == null) {
+        throw Exception('Could not get current location');
+      }
+      
+      // Get user data
+      final userData = await _supabase
+          .from('profiles')
+          .select()
+          .eq('id', user.id)
+          .single();
+      
+      // Create request in Supabase
+      final response = await _supabase
+          .from('requests')
+          .insert({
+            'user_id': user.id,
+            'user_name': userData['full_name'] ?? 'User ${user.id.substring(0, 6)}',
+            'amount': amount,
+            'type': type,
+            'status': 'pending',
+            'latitude': position.latitude,
+            'longitude': position.longitude,
+            'created_at': DateTime.now().toIso8601String(),
+          })
+          .select()
+          .single();
+      
+      if (response == null) {
+        throw Exception('Failed to create request: No response from server');
+      }
+      
+      return Request.fromJson(response);
+    } catch (e) {
+      debugPrint('Error in createRequest: $e');
+      rethrow;
+    }
+  }
+
+  Future<List<Request>> getNearbyRequests({double radius = 5.0}) async {
+    try {
+      final user = _supabase.auth.currentUser;
+      if (user == null) throw Exception('Not authenticated');
+
+      // Get user's current location from the location service
+      final locationService = Provider.of<LocationService>(
+        _getContext(),
+        listen: false,
+      );
+      
+      final position = await locationService.getCurrentLocation();
+      if (position == null) {
+        throw Exception('Could not get current location');
+      }
+      
+      // First, get all pending requests (excluding user's own requests)
+      final response = await _supabase
+          .from('requests')
+          .select('*, user:user_id(*)')
+          .neq('user_id', user.id)
+          .eq('status', 'pending')
+          .order('created_at', ascending: false);
+
+      if (response == null) return [];
+
+      // Convert response to List if it's not already
+      final List<dynamic> requestsList = response is List ? response : [response];
+
+      // Filter by distance on the client side
+      final nearbyRequests = requestsList.where((request) {
+        try {
+          final lat = request['latitude'] is num ? (request['latitude'] as num).toDouble() : 0.0;
+          final lng = request['longitude'] is num ? (request['longitude'] as num).toDouble() : 0.0;
+          
+          final distance = _calculateDistance(
+            position.latitude,
+            position.longitude,
+            lat,
+            lng,
+          );
+          return distance <= radius;
+        } catch (e) {
+          debugPrint('Error calculating distance for request: $e');
+          return false;
+        }
+      }).toList();
+
+      return nearbyRequests
+          .map((json) => Request.fromJson(json is Map<String, dynamic> ? json : json as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      debugPrint('Error in getNearbyRequests: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> acceptRequest(String requestId) async {
+    try {
+      final token = await _getAuthToken();
+      final response = await http.post(
+        Uri.parse('$baseUrl/requests/$requestId/accept'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode != 200) {
+        throw http.ClientException(
+          'Failed to accept request: ${response.statusCode}\n${response.body}',
+          Uri.parse('$baseUrl/requests/$requestId/accept'),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error in acceptRequest: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> completeRequest(String requestId) async {
+    try {
+      final token = await _getAuthToken();
+      final response = await http.post(
+        Uri.parse('$baseUrl/requests/$requestId/complete'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode != 200) {
+        throw http.ClientException(
+          'Failed to complete request: ${response.statusCode}\n${response.body}',
+          Uri.parse('$baseUrl/requests/$requestId/complete'),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error in completeRequest: $e');
+      rethrow;
+    }
+  }
+
+  // Get route between two points
+  Future<Map<String, dynamic>> getRoute(
+    double startLat,
+    double startLng,
+    double endLat,
+    double endLng,
+  ) async {
+    try {
+      final token = await _getAuthToken();
+      final uri = Uri.parse(
+        '$baseUrl/route?start_lat=$startLat&start_lng=$startLng&end_lat=$endLat&end_lng=$endLng',
+      );
+      
+      final response = await http.get(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      } else {
+        throw http.ClientException(
+          'Failed to get route: ${response.statusCode}\n${response.body}',
+          uri,
+        );
+      }
+    } catch (e) {
+      debugPrint('Error in getRoute: $e');
+      rethrow;
+    }
+  }
+
+  // Create a new request (wrapper for createRequest that notifies listeners)
+  Future<Request> createNewRequest({
+    required double amount,
+    required String type,
+  }) async {
+    try {
+      final request = await createRequest(amount: amount, type: type);
+      notifyListeners();
+      return request;
+    } catch (e) {
+      debugPrint('Error in createNewRequest: $e');
+      rethrow;
+    }
+  }
+
+  // Get transaction history for the current user
+  Future<List<Transaction>> getTransactionHistory() async {
+    try {
+      final token = await _getAuthToken();
+      final response = await http.get(
+        Uri.parse('$baseUrl/transactions'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        return data.map((json) => Transaction.fromJson(json)).toList();
+      } else {
+        throw http.ClientException(
+          'Failed to load transaction history: ${response.statusCode}',
+          Uri.parse('$baseUrl/transactions'),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error in getTransactionHistory: $e');
+      rethrow;
+    }
+  }
+
+  BuildContext _getContext() {
+    final context = navigatorKey.currentContext;
+    if (context == null) throw Exception('No navigator context available');
+    return context;
+  }
+
+  // Helper method to calculate distance between two coordinates using Haversine formula
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const p = 0.017453292519943295; // Math.PI / 180
+    final a = 0.5 - 
+        cos((lat2 - lat1) * p) / 2 + 
+        cos(lat1 * p) * cos(lat2 * p) * (1 - cos((lon2 - lon1) * p)) / 2;
+    return 12742 * asin(sqrt(a)); // 2 * R; R = 6371 km
+  }
+}
