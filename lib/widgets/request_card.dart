@@ -16,6 +16,7 @@ class RequestCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final apiService = Provider.of<ApiService>(context);
     Provider.of<LocationService>(context);
+    final distance = request.distance;
     
     return Card(
       margin: EdgeInsets.symmetric(vertical: 8),
@@ -30,9 +31,9 @@ class RequestCard extends StatelessWidget {
             ),
             SizedBox(height: 8),
             Text('Amount: \$${request.amount.toStringAsFixed(2)}'),
+            if (distance != null)
+              Text('Distance: ${distance.toStringAsFixed(2)} km away'),
             SizedBox(height: 4),
-            if (request.distance != null)
-              Text('Distance: ${request.distance!.toStringAsFixed(2)} km away'),
             SizedBox(height: 4),
             Text('Status: ${request.status}'),
             SizedBox(height: 4),

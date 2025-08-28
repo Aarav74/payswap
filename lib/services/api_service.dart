@@ -1,67 +1,72 @@
 // services/api_service.dart
 import 'dart:convert';
-import 'dart:async';
 import 'dart:math' show cos, sqrt, asin;
+import 'dart:async';
 import 'package:http/http.dart' as http;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import '../models/request_model.dart';
 import '../models/user_model.dart' as local_models;
 import '../models/transaction_model.dart';
 import 'auth_service.dart';
-import 'location_service.dart';
-import '../config/env.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:geolocator/geolocator.dart';
-
-final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 class ApiService with ChangeNotifier {
   static const String baseUrl = 'http://10.0.2.2:8000/api';
   final AuthService authService;
-  final SupabaseClient _supabase = Supabase.instance.client;
+  final Function()? onLocationRequired;
 
-  ApiService({required this.authService});
+  ApiService({required this.authService, this.onLocationRequired});
 
-  Future<String> _getAuthToken() async {
-    final token = await authService.getToken();
-    if (token == null) {
-      throw const FormatException('Not authenticated');
+  Future<String?> _getAuthToken() async {
+    try {
+      final token = await authService.getToken();
+      if (token == null) {
+        debugPrint('No authentication token available');
+        return null;
+      }
+      return token;
+    } catch (e) {
+      debugPrint('Error getting auth token: $e');
+      return null;
     }
-    return token;
   }
 
-  Future<local_models.User> getCurrentUser() async {
+  Future<local_models.User?> getCurrentUser() async {
     try {
       final token = await _getAuthToken();
+      if (token == null) {
+        throw Exception('Not authenticated - no token available');
+      }
+
       final response = await http.get(
         Uri.parse('$baseUrl/user/me'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-      );
+      ).timeout(Duration(seconds: 10));
 
       if (response.statusCode == 200) {
-        return local_models.User.fromJson(json.decode(response.body));
+        final responseData = json.decode(response.body);
+        return local_models.User.fromJson(responseData);
       } else {
-        throw http.ClientException(
-          'Failed to load user data: ${response.statusCode}',
-          Uri.parse('$baseUrl/user/me'),
-        );
+        throw Exception('Failed to load user data: ${response.statusCode}');
       }
-    } on FormatException {
-      rethrow;
     } catch (e) {
       debugPrint('Error in getCurrentUser: $e');
       rethrow;
     }
   }
 
-  Future<void> updateUserLocation(double latitude, double longitude) async {
+  Future<bool> updateUserLocation(double latitude, double longitude) async {
     try {
       final token = await _getAuthToken();
+      if (token == null) {
+        debugPrint('Cannot update location: No auth token');
+        return false;
+      }
+
+      debugPrint('Updating user location to: $latitude, $longitude');
+
       final response = await http.post(
         Uri.parse('$baseUrl/user/location'),
         headers: {
@@ -72,265 +77,411 @@ class ApiService with ChangeNotifier {
           'latitude': latitude,
           'longitude': longitude,
         }),
-      );
+      ).timeout(Duration(seconds: 15));
 
-      if (response.statusCode != 200) {
-        throw http.ClientException(
-          'Failed to update location: ${response.statusCode}',
-          Uri.parse('$baseUrl/user/location'),
-        );
+      debugPrint('Location update response: ${response.statusCode}');
+      debugPrint('Location update body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        return true;
+      } else {
+        debugPrint('Failed to update location: ${response.statusCode}');
+        return false;
       }
+    } on TimeoutException {
+      debugPrint('Location update timeout');
+      return false;
     } catch (e) {
       debugPrint('Error in updateUserLocation: $e');
-      rethrow;
+      return false;
     }
   }
 
-  // Create a new request
-  Future<Request> createRequest({
+  // Create a new request using FastAPI backend
+  Future<Request?> createRequest({
     required double amount,
     required String type,
+    required double latitude,
+    required double longitude,
   }) async {
     try {
-      final user = _supabase.auth.currentUser;
-      if (user == null) throw Exception('Not authenticated');
-      
-      // Get current location
-      final locationService = Provider.of<LocationService>(
-        _getContext(),
-        listen: false,
-      );
-      final position = await locationService.getCurrentLocation();
-      if (position == null) {
-        throw Exception('Could not get current location');
+      // Validate inputs first
+      if (amount <= 0) {
+        throw Exception('Amount must be greater than 0');
       }
+      if (type.isEmpty) {
+        throw Exception('Request type is required');
+      }
+      if (latitude == 0.0 || longitude == 0.0) {
+        throw Exception('Invalid location coordinates');
+      }
+
+      final token = await _getAuthToken();
+      if (token == null) {
+        throw Exception('Please login to create a request');
+      }
+
+      debugPrint('Creating request with: amount=$amount, type=$type');
+      debugPrint('Using location: $latitude, $longitude');
+
+      // First update the user's location with timeout
+      debugPrint('Updating user location before creating request...');
+      try {
+        final locationUpdated = await updateUserLocation(latitude, longitude)
+            .timeout(Duration(seconds: 10));
+        
+        if (!locationUpdated) {
+          throw Exception('Failed to update location in the server');
+        }
+        
+        // Small delay to ensure location is updated in database
+        await Future.delayed(Duration(milliseconds: 500));
+      } on TimeoutException {
+        debugPrint('Location update timed out');
+        throw Exception('Location update timed out. Please try again.');
+      } catch (e) {
+        debugPrint('Location update error: $e');
+        throw Exception('Failed to update your location. Please try again.');
+      }
+
+      // Now create the request with timeout
+      debugPrint('Sending create request to server...');
+      final completer = Completer<http.Response>();
+      final timer = Timer(Duration(seconds: 20), () {
+        if (!completer.isCompleted) {
+          completer.completeError(TimeoutException('Create request timed out after 20 seconds'));
+        }
+      });
       
-      // Get user data
-      final userData = await _supabase
-          .from('profiles')
-          .select()
-          .eq('id', user.id)
-          .single();
-      
-      // Create request in Supabase
-      final response = await _supabase
-          .from('requests')
-          .insert({
-            'user_id': user.id,
-            'user_name': userData['full_name'] ?? 'User ${user.id.substring(0, 6)}',
+      try {
+        final response = await http.post(
+          Uri.parse('$baseUrl/requests'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: json.encode({
             'amount': amount,
             'type': type,
-            'status': 'pending',
-            'latitude': position.latitude,
-            'longitude': position.longitude,
-            'created_at': DateTime.now().toIso8601String(),
-          })
-          .select()
-          .single();
-      
-      if (response == null) {
-        throw Exception('Failed to create request: No response from server');
+            'latitude': latitude,
+            'longitude': longitude,
+          }),
+        );
+        timer.cancel();
+        completer.complete(response);
+      } catch (e) {
+        timer.cancel();
+        completer.completeError(e);
       }
       
-      return Request.fromJson(response);
+      final response = await completer.future;
+
+      debugPrint('Create request response status: ${response.statusCode}');
+      debugPrint('Create request response body: ${response.body}');
+
+      if (response.statusCode == 201) {
+        final responseData = json.decode(response.body);
+        final createdRequest = Request.fromJson(responseData);
+        notifyListeners();
+        return createdRequest;
+      } else {
+        // Parse error response
+        String errorMessage = 'Failed to create request';
+        try {
+          final errorData = json.decode(response.body);
+          errorMessage = errorData['detail'] ?? errorData['message'] ?? errorMessage;
+        } catch (e) {
+          debugPrint('Error parsing error response: $e');
+          errorMessage = 'Server error (${response.statusCode}). Please try again.';
+        }
+        throw Exception('$errorMessage (Status: ${response.statusCode})');
+      }
+    } on TimeoutException {
+      debugPrint('Create request timed out');
+      throw Exception('Request timed out. Please check your connection and try again.');
+    } on http.ClientException catch (e) {
+      debugPrint('Network error in createRequest: $e');
+      throw Exception('Network error. Please check your internet connection.');
     } catch (e) {
       debugPrint('Error in createRequest: $e');
       rethrow;
     }
   }
 
+  // Get nearby requests using FastAPI backend
   Future<List<Request>> getNearbyRequests({double radius = 5.0}) async {
     try {
-      final user = _supabase.auth.currentUser;
-      if (user == null) throw Exception('Not authenticated');
-
-      // Get user's current location from the location service
-      final locationService = Provider.of<LocationService>(
-        _getContext(),
-        listen: false,
-      );
-      
-      final position = await locationService.getCurrentLocation();
-      if (position == null) {
-        throw Exception('Could not get current location');
+      final token = await _getAuthToken();
+      if (token == null) {
+        throw Exception('Please login to view requests');
       }
-      
-      // First, get all pending requests (excluding user's own requests)
-      final response = await _supabase
-          .from('requests')
-          .select('*, user:user_id(*)')
-          .neq('user_id', user.id)
-          .eq('status', 'pending')
-          .order('created_at', ascending: false);
 
-      if (response == null) return [];
-
-      // Convert response to List if it's not already
-      final List<dynamic> requestsList = response is List ? response : [response];
-
-      // Filter by distance on the client side
-      final nearbyRequests = requestsList.where((request) {
-        try {
-          final lat = request['latitude'] is num ? (request['latitude'] as num).toDouble() : 0.0;
-          final lng = request['longitude'] is num ? (request['longitude'] as num).toDouble() : 0.0;
-          
-          final distance = _calculateDistance(
-            position.latitude,
-            position.longitude,
-            lat,
-            lng,
-          );
-          return distance <= radius;
-        } catch (e) {
-          debugPrint('Error calculating distance for request: $e');
-          return false;
+      final completer = Completer<http.Response>();
+      final timer = Timer(Duration(seconds: 15), () {
+        if (!completer.isCompleted) {
+          completer.completeError(TimeoutException('Get nearby requests timed out after 15 seconds'));
         }
-      }).toList();
-
-      return nearbyRequests
-          .map((json) => Request.fromJson(json is Map<String, dynamic> ? json : json as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      debugPrint('Error in getNearbyRequests: $e');
-      rethrow;
-    }
-  }
-
-  Future<void> acceptRequest(String requestId) async {
-    try {
-      final token = await _getAuthToken();
-      final response = await http.post(
-        Uri.parse('$baseUrl/requests/$requestId/accept'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      );
-
-      if (response.statusCode != 200) {
-        throw http.ClientException(
-          'Failed to accept request: ${response.statusCode}\n${response.body}',
-          Uri.parse('$baseUrl/requests/$requestId/accept'),
-        );
-      }
-    } catch (e) {
-      debugPrint('Error in acceptRequest: $e');
-      rethrow;
-    }
-  }
-
-  Future<void> completeRequest(String requestId) async {
-    try {
-      final token = await _getAuthToken();
-      final response = await http.post(
-        Uri.parse('$baseUrl/requests/$requestId/complete'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      );
-
-      if (response.statusCode != 200) {
-        throw http.ClientException(
-          'Failed to complete request: ${response.statusCode}\n${response.body}',
-          Uri.parse('$baseUrl/requests/$requestId/complete'),
-        );
-      }
-    } catch (e) {
-      debugPrint('Error in completeRequest: $e');
-      rethrow;
-    }
-  }
-
-  // Get route between two points
-  Future<Map<String, dynamic>> getRoute(
-    double startLat,
-    double startLng,
-    double endLat,
-    double endLng,
-  ) async {
-    try {
-      final token = await _getAuthToken();
-      final uri = Uri.parse(
-        '$baseUrl/route?start_lat=$startLat&start_lng=$startLng&end_lat=$endLat&end_lng=$endLng',
-      );
+      });
       
-      final response = await http.get(
-        uri,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      );
+      try {
+        final response = await http.get(
+          Uri.parse('$baseUrl/requests/nearby?radius=$radius'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+        );
+        timer.cancel();
+        completer.complete(response);
+      } catch (e) {
+        timer.cancel();
+        completer.completeError(e);
+      }
+      
+      final response = await completer.future;
+
+      debugPrint('Get nearby requests response: ${response.statusCode}');
 
       if (response.statusCode == 200) {
-        return json.decode(response.body);
+        final List<dynamic> data = json.decode(response.body);
+        return data.map((json) => Request.fromJson(json)).toList();
+      } else if (response.statusCode == 400) {
+        // Handle location not set error
+        try {
+          final errorData = json.decode(response.body);
+          if (errorData['detail'] != null && errorData['detail'].contains('location not set')) {
+            // Call onLocationRequired callback if provided
+            if (onLocationRequired != null) {
+              onLocationRequired!();
+            }
+            throw Exception('Please enable location services and update your location');
+          }
+        } catch (e) {
+          if (e.toString().contains('Please enable location')) rethrow;
+        }
+        throw Exception('Failed to load requests: ${response.statusCode}');
       } else {
-        throw http.ClientException(
-          'Failed to get route: ${response.statusCode}\n${response.body}',
-          uri,
-        );
+        throw Exception('Failed to load requests: ${response.statusCode}');
       }
+    } on TimeoutException {
+      debugPrint('Get nearby requests timed out');
+      throw Exception('Request timed out. Please check your connection.');
+    } on http.ClientException catch (e) {
+      debugPrint('Network error in getNearbyRequests: $e');
+      throw Exception('Network error. Please check your internet connection.');
     } catch (e) {
-      debugPrint('Error in getRoute: $e');
-      rethrow;
+      debugPrint('Error in getNearbyRequests: $e');
+      if (e.toString().contains('Please enable location') || 
+          e.toString().contains('Please login')) {
+        rethrow;
+      }
+      return [];
     }
   }
 
-  // Create a new request (wrapper for createRequest that notifies listeners)
-  Future<Request> createNewRequest({
-    required double amount,
-    required String type,
-  }) async {
+  // Accept a request
+  Future<bool> acceptRequest(String requestId) async {
     try {
-      final request = await createRequest(amount: amount, type: type);
-      notifyListeners();
-      return request;
+      final token = await _getAuthToken();
+      if (token == null) {
+        debugPrint('Cannot accept request: No auth token');
+        return false;
+      }
+
+      final completer = Completer<http.Response>();
+      final timer = Timer(Duration(seconds: 10), () {
+        if (!completer.isCompleted) {
+          completer.completeError(TimeoutException('Accept request timed out after 10 seconds'));
+        }
+      });
+      
+      try {
+        final response = await http.post(
+          Uri.parse('$baseUrl/requests/$requestId/accept'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+        );
+        timer.cancel();
+        completer.complete(response);
+      } catch (e) {
+        timer.cancel();
+        completer.completeError(e);
+      }
+      
+      final response = await completer.future;
+
+      debugPrint('Accept request response: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        notifyListeners();
+        return true;
+      } else {
+        debugPrint('Failed to accept request: ${response.statusCode}');
+        return false;
+      }
+    } on TimeoutException {
+      debugPrint('Accept request timed out');
+      return false;
     } catch (e) {
-      debugPrint('Error in createNewRequest: $e');
-      rethrow;
+      debugPrint('Error in acceptRequest: $e');
+      return false;
     }
   }
 
-  // Get transaction history for the current user
+  // Mark a request as completed
+  Future<bool> completeRequest(String requestId) async {
+    try {
+      final token = await _getAuthToken();
+      if (token == null) {
+        debugPrint('Cannot complete request: No auth token');
+        return false;
+      }
+
+      final completer = Completer<http.Response>();
+      final timer = Timer(Duration(seconds: 10), () {
+        if (!completer.isCompleted) {
+          completer.completeError(TimeoutException('Complete request timed out after 10 seconds'));
+        }
+      });
+      
+      try {
+        final response = await http.post(
+          Uri.parse('$baseUrl/requests/$requestId/complete'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+        );
+        timer.cancel();
+        completer.complete(response);
+      } catch (e) {
+        timer.cancel();
+        completer.completeError(e);
+      }
+      
+      final response = await completer.future;
+
+      debugPrint('Complete request response: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        notifyListeners();
+        return true;
+      } else {
+        debugPrint('Failed to complete request: ${response.statusCode}');
+        return false;
+      }
+    } on TimeoutException {
+      debugPrint('Complete request timed out');
+      return false;
+    } catch (e) {
+      debugPrint('Error in completeRequest: $e');
+      return false;
+    }
+  }
+
+  // Get transaction history
   Future<List<Transaction>> getTransactionHistory() async {
     try {
       final token = await _getAuthToken();
-      final response = await http.get(
-        Uri.parse('$baseUrl/transactions'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      );
+      if (token == null) {
+        throw Exception('Please login to view transaction history');
+      }
+
+      final completer = Completer<http.Response>();
+      final timer = Timer(Duration(seconds: 15), () {
+        if (!completer.isCompleted) {
+          completer.completeError(TimeoutException('Get transaction history timed out after 15 seconds'));
+        }
+      });
+      
+      try {
+        final response = await http.get(
+          Uri.parse('$baseUrl/transactions'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+        );
+        timer.cancel();
+        completer.complete(response);
+      } catch (e) {
+        timer.cancel();
+        completer.completeError(e);
+      }
+      
+      final response = await completer.future;
 
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
         return data.map((json) => Transaction.fromJson(json)).toList();
       } else {
-        throw http.ClientException(
-          'Failed to load transaction history: ${response.statusCode}',
-          Uri.parse('$baseUrl/transactions'),
-        );
+        throw Exception('Failed to load transaction history: ${response.statusCode}');
       }
+    } on TimeoutException {
+      debugPrint('Get transaction history timed out');
+      throw Exception('Request timed out. Please check your connection.');
     } catch (e) {
       debugPrint('Error in getTransactionHistory: $e');
-      rethrow;
+      return [];
     }
   }
 
-  BuildContext _getContext() {
-    final context = navigatorKey.currentContext;
-    if (context == null) throw Exception('No navigator context available');
-    return context;
+  // Get route information
+  Future<Map<String, dynamic>?> getRoute(double startLat, double startLng, double endLat, double endLng) async {
+    try {
+      final token = await _getAuthToken();
+      if (token == null) {
+        debugPrint('Cannot get route: No auth token');
+        return null;
+      }
+
+      final completer = Completer<http.Response>();
+      final timer = Timer(Duration(seconds: 15), () {
+        if (!completer.isCompleted) {
+          completer.completeError(TimeoutException('Get route timed out after 15 seconds'));
+        }
+      });
+      
+      try {
+        final response = await http.get(
+          Uri.parse('$baseUrl/route?start_lat=$startLat&start_lng=$startLng&end_lat=$endLat&end_lng=$endLng'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+        );
+        timer.cancel();
+        completer.complete(response);
+      } catch (e) {
+        timer.cancel();
+        completer.completeError(e);
+      }
+      
+      final response = await completer.future;
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      } else {
+        debugPrint('Failed to get route: ${response.statusCode}');
+        return null;
+      }
+    } on TimeoutException {
+      debugPrint('Get route timed out');
+      return null;
+    } catch (e) {
+      debugPrint('Error in getRoute: $e');
+      return null;
+    }
   }
 
-  // Helper method to calculate distance between two coordinates using Haversine formula
-  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
-    const p = 0.017453292519943295; // Math.PI / 180
+  // Helper method to calculate distance between two coordinates
+  double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const p = 0.017453292519943295;
     final a = 0.5 - 
         cos((lat2 - lat1) * p) / 2 + 
         cos(lat1 * p) * cos(lat2 * p) * (1 - cos((lon2 - lon1) * p)) / 2;
-    return 12742 * asin(sqrt(a)); // 2 * R; R = 6371 km
+    return 12742 * asin(sqrt(a));
   }
 }

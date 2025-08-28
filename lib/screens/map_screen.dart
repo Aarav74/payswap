@@ -1,15 +1,19 @@
 // screens/map_screen.dart
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
-import 'package:geolocator/geolocator.dart';
 import '../services/location_service.dart';
 import '../services/api_service.dart';
 // Error widget import removed
 
 class MapScreen extends StatefulWidget {
+  const MapScreen({super.key});
+
   @override
+  // ignore: library_private_types_in_public_api
   _MapScreenState createState() => _MapScreenState();
 }
 
@@ -30,14 +34,15 @@ class _MapScreenState extends State<MapScreen> {
     await locationService.startLiveTracking();
     
     // Also update server with initial location
+    // ignore: use_build_context_synchronously
     final apiService = Provider.of<ApiService>(context, listen: false);
     try {
       await apiService.updateUserLocation(
         locationService.latitude,
         locationService.longitude,
       );
+    // ignore: empty_catches
     } catch (e) {
-      print('Failed to update server location: $e');
     }
   }
 
@@ -125,9 +130,9 @@ class _MapScreenState extends State<MapScreen> {
         padding: const EdgeInsets.all(16.0),
         child: FloatingActionButton(
           onPressed: _centerMapOnUser,
-          child: Icon(Icons.my_location),
           backgroundColor: Colors.blue,
           mini: true,
+          child: Icon(Icons.my_location),
         ),
       ),
     );

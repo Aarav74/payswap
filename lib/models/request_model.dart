@@ -41,7 +41,7 @@ class Request {
     );
   }
 
-  get distance => null;
+  Null get distance => null;
 
   Map<String, dynamic> toJson() {
     return {

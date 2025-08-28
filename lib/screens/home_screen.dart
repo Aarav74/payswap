@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/location_service.dart';
-// Error widget import removed
+import '../services/websocket_service.dart';
 import 'map_screen.dart';
 import 'request_screen.dart';
 import 'profile_screen.dart';
@@ -24,18 +24,90 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    // Initialize location service when home screen loads
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    // Initialize services when home screen loads
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       final locationService = Provider.of<LocationService>(context, listen: false);
-      locationService.getCurrentLocation();
+      final webSocketService = Provider.of<WebSocketService>(context, listen: false);
+      
+      // Get current location
+      try {
+        await locationService.getCurrentLocation();
+      } catch (e) {
+        debugPrint('Location error: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Location error: ${e.toString()}'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      }
+      
+      // Connect to WebSocket
+      _connectToWebSocket();
+      
+      // Listen for WebSocket connection state changes
+      webSocketService.addListener(_handleWebSocketStateChange);
     });
+  }
+  
+  void _connectToWebSocket() async {
+    if (!mounted) return;
+    
+    final webSocketService = Provider.of<WebSocketService>(context, listen: false);
+    
+    try {
+      // First check if server is available
+      final isAvailable = await webSocketService.isServerAvailable();
+      if (!isAvailable) {
+        throw Exception('Server is not available. Please check your internet connection.');
+      }
+      
+      await webSocketService.connect();
+    } catch (e) {
+      debugPrint('WebSocket connection error: $e');
+      if (mounted) {
+        // Show error message to user
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Connection error: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 5),
+            action: SnackBarAction(
+              label: 'Retry',
+              onPressed: _connectToWebSocket,
+            ),
+          ),
+        );
+      }
+    }
+  }
+  
+  void _handleWebSocketStateChange() {
+    if (!mounted) return;
+    
+    final webSocketService = Provider.of<WebSocketService>(context, listen: false);
+    
+    // Show connection status to user
+    if (webSocketService.isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Connected to real-time updates'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
   }
 
   @override
   void dispose() {
-    // Stop live tracking when home screen is disposed
+    final webSocketService = Provider.of<WebSocketService>(context, listen: false);
+    webSocketService.removeListener(_handleWebSocketStateChange);
+    
     final locationService = Provider.of<LocationService>(context, listen: false);
     locationService.stopLiveTracking();
+    
     super.dispose();
   }
 

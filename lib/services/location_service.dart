@@ -50,6 +50,7 @@ class LocationService with ChangeNotifier {
       
       // Get current position
       final position = await Geolocator.getCurrentPosition(
+        // ignore: deprecated_member_use
         desiredAccuracy: LocationAccuracy.high,
       );
       
@@ -70,6 +71,7 @@ class LocationService with ChangeNotifier {
       _isLoading = false;
       notifyListeners();
     }
+    return null;
   }
 
   Future<void> startLiveTracking() async {
@@ -141,7 +143,6 @@ class LocationService with ChangeNotifier {
   Future<void> _updateServerLocation(Position position) async {
     // This would typically call your API to update the user's location on the server
     // For now, we'll just print it
-    print('Updating server location: ${position.latitude}, ${position.longitude}');
   }
 
   Future<void> _getAddressFromCoordinates(double lat, double lng) async {
@@ -167,7 +168,9 @@ class LocationService with ChangeNotifier {
         }
       }
     } catch (e) {
-      print('Error getting address: $e');
+      if (kDebugMode) {
+        print('Error getting address: $e');
+      }
       _address = 'Location: ${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}';
     }
     notifyListeners();
