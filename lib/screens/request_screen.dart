@@ -1,10 +1,8 @@
 // screens/request_screen.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'dart:convert';
-import 'dart:async';
 import '../models/request_model.dart';
-import '../services/api_service.dart'; // We need this for creating requests
 import '../services/request_polling_service.dart';
 import '../services/location_service.dart';
 import '../services/auth_service.dart';
@@ -23,7 +21,7 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
   bool _isLoading = false;
   String _error = '';
   
-  // Keep the screen alive for background polling
+  
   @override
   bool get wantKeepAlive => true;
 
@@ -44,7 +42,6 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
   Future<void> _startPolling() async {
     final pollingService = Provider.of<RequestPollingService>(context, listen: false);
     
-    // Check if server is available before starting polling
     final isAvailable = await pollingService.isServerAvailable();
     if (!isAvailable && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -56,32 +53,32 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
       return;
     }
     
-    // Start polling
     await pollingService.startPolling(interval: Duration(seconds: 15));
   }
   
-  // Manual refresh
   Future<void> _refreshRequests() async {
     final pollingService = Provider.of<RequestPollingService>(context, listen: false);
     await pollingService.refresh();
   }
 
-  // Handle pull-to-refresh
   Future<void> _handleRefresh() async {
     await _refreshRequests();
   }
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Required for AutomaticKeepAliveClientMixin
+    super.build(context); // Needed for AutomaticKeepAliveClientMixin
     
     final pollingService = Provider.of<RequestPollingService>(context);
     final locationService = Provider.of<LocationService>(context);
     final authService = Provider.of<AuthService>(context);
-    final apiService = Provider.of<ApiService>(context); // Add this
     
-    // Get all requests (don't filter by type in the list)
     final allRequests = pollingService.requests;
+    
+    // Show loading state if needed
+    if (_isLoading) {
+      return Center(child: CircularProgressIndicator());
+    }
     
     return Scaffold(
       body: RefreshIndicator(
@@ -186,7 +183,7 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
                           ),
                         ),
                       ElevatedButton(
-                        onPressed: _isLoading ? null : () => _createRequest(apiService, pollingService, locationService, authService),
+                        onPressed: _isLoading ? null : () => _createRequest(pollingService, locationService, authService),
                         style: ElevatedButton.styleFrom(
                           minimumSize: Size(double.infinity, 50),
                           shape: RoundedRectangleBorder(
@@ -417,10 +414,9 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
     );
   }
 
-  Future<void> _createRequest(ApiService apiService, RequestPollingService pollingService, LocationService locationService, AuthService authService) async {
+  Future<void> _createRequest(RequestPollingService pollingService, LocationService locationService, AuthService authService) async {
     debugPrint('=== Starting _createRequest ===');
     
-    // Check if user is authenticated
     if (authService.currentUser == null) {
       setState(() {
         _error = 'Please login to create a request';
@@ -428,7 +424,6 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
       return;
     }
 
-    // Validate amount input
     if (_amountController.text.trim().isEmpty) {
       setState(() {
         _error = 'Please enter an amount';
@@ -457,7 +452,6 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
     });
 
     try {
-      // Get current location with timeout
       debugPrint('Getting current location...');
       await locationService.getCurrentLocation().timeout(Duration(seconds: 10));
       
@@ -467,23 +461,18 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
 
       debugPrint('Location obtained: ${locationService.latitude}, ${locationService.longitude}');
 
-      // Map display type to API type
+      // Map display type to API type - FIXED: Use the exact values the backend expects
       String requestType = _selectedType == 'Need Cash' ? 'cash' : 'online';
       
-      // Create request using ApiService
-      debugPrint('Creating request via API...');
-      final request = await apiService.createRequest(
+      debugPrint('Creating request via polling service...');
+      final request = await pollingService.createRequest(
         amount: amount,
-        type: requestType,
+        type: requestType, // Send the correct type that backend expects
         latitude: locationService.latitude!,
         longitude: locationService.longitude!,
       ).timeout(Duration(seconds: 15));
 
       if (request != null) {
-        // Add to polling service for immediate display
-        pollingService.addRequest(request);
-        
-        // Clear form and reset state
         _amountController.clear();
         setState(() {
           _selectedType = 'Need Cash';
@@ -527,12 +516,10 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
       
       String errorMessage = e.toString();
       
-      // Clean up error message
       if (errorMessage.startsWith('Exception: ')) {
         errorMessage = errorMessage.substring(11);
       }
       
-      // Handle specific error types
       if (errorMessage.toLowerCase().contains('location')) {
         errorMessage = 'Location error. Please enable location services for this app.';
       } else if (errorMessage.toLowerCase().contains('authentication') || 

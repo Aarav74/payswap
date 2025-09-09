@@ -366,7 +366,7 @@ async def create_request(
             "user_id": current_user.id,
             "user_name": profile.get("name", "Unknown User"),
             "amount": float(request_data.amount),
-            "type": request_data.type,
+            "type": api_type,  # Use the mapped type
             "latitude": lat_float,
             "longitude": lng_float,
             "status": "pending",

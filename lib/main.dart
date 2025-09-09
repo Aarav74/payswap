@@ -1,4 +1,3 @@
-// main.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -36,33 +35,50 @@ class MyApp extends StatelessWidget {
           create: (context) => ApiService(authService: context.read<AuthService>()),
           update: (context, authService, previous) => previous ?? ApiService(authService: authService),
         ),
-        // Replace WebSocketService with RequestPollingService
         ChangeNotifierProxyProvider<AuthService, RequestPollingService>(
           create: (context) => RequestPollingService(authService: context.read<AuthService>()),
-          update: (context, authService, pollingService) => RequestPollingService(authService: authService),
+          update: (context, authService, previous) => previous ?? RequestPollingService(authService: authService),
         ),
       ],
       child: MaterialApp(
-        title: 'Cash Exchange',
+        title: 'PaySwap',
         theme: ThemeData(
           primarySwatch: Colors.blue,
-          useMaterial3: true, // Enable Material 3 for better UI
+          useMaterial3: true,
+          appBarTheme: AppBarTheme(
+            backgroundColor: Colors.blue,
+            foregroundColor: Colors.white,
+            elevation: 0,
+            centerTitle: false,
+          ),
+          // Use copyWith to modify the default card theme instead
+          cardTheme: ThemeData.light().cardTheme.copyWith(
+            elevation: 2,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            margin: EdgeInsets.symmetric(vertical: 8),
+          ),
+          floatingActionButtonTheme: FloatingActionButtonThemeData(
+            backgroundColor: Colors.blue,
+            foregroundColor: Colors.white,
+          ),
         ),
         home: Consumer<AuthService>(
           builder: (context, authService, child) {
             if (authService.isLoading) {
               return Scaffold(
+                backgroundColor: Colors.white,
                 body: Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       CircularProgressIndicator(),
-                      SizedBox(height: 16),
+                      SizedBox(height: 20),
                       Text(
-                        'Loading...',
+                        'Loading PaySwap...',
                         style: TextStyle(
                           fontSize: 16,
                           color: Colors.grey[600],
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],

@@ -82,6 +82,58 @@ class RequestPollingService with ChangeNotifier {
     _lastFetch = null;
     notifyListeners();
   }
+
+  // Create a new request
+  Future<Request?> createRequest({
+    required double amount,
+    required String type,
+    required double latitude,
+    required double longitude,
+  }) async {
+    try {
+      _isLoading = true;
+      _error = null;
+      notifyListeners();
+
+      final token = await _authService.getToken();
+      if (token == null) {
+        throw Exception('Not authenticated');
+      }
+
+      final response = await http.post(
+        Uri.parse('$_httpBaseUrl/requests'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'amount': amount,
+          'type': type,
+          'latitude': latitude,
+          'longitude': longitude,
+        }),
+      );
+
+      if (response.statusCode == 201) {
+        final data = jsonDecode(response.body);
+        final request = Request.fromJson(data);
+        _requests.insert(0, request);
+        _lastRequestId = request.id;
+        notifyListeners();
+        return request;
+      } else {
+        final error = jsonDecode(response.body)['error'] ?? 'Failed to create request';
+        throw Exception(error);
+      }
+    } catch (e) {
+      _error = e.toString();
+      debugPrint('Error creating request: $e');
+      rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
   
   // Fetch requests from API
   Future<void> _fetchRequests({
