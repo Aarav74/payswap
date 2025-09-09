@@ -1,15 +1,14 @@
-from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header
+from fastapi import FastAPI, Depends, HTTPException, status, Header
 from fastapi.middleware.cors import CORSMiddleware
 from numpy import sin
 from supabase import create_client, Client
 from typing import List, Optional, Dict, Any
 import os
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta
 import math
 import requests
 import json
-import asyncio
 from dotenv import load_dotenv
 import traceback
 import logging
@@ -22,7 +21,7 @@ load_dotenv()
 
 app = FastAPI()
 
-# Allow all origins for development - this is crucial for WebSocket connections
+# Allow all origins for development
 origins = [
     "*",  # Allow all origins for development
 ]
@@ -42,65 +41,6 @@ supabase: Client = create_client(
 )
 
 GRAPHHOPPER_API_KEY = os.getenv("GRAPHHOPPER_API_KEY")
-
-# WebSocket Connection Manager
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
-        self.request_subscriptions: Dict[str, List[str]] = {}  # request_id -> list of user_ids
-
-    async def connect(self, websocket: WebSocket, user_id: str):
-        await websocket.accept()
-        self.active_connections[user_id] = websocket
-        logger.info(f"User {user_id} connected. Total connections: {len(self.active_connections)}")
-
-    def disconnect(self, user_id: str):
-        if user_id in self.active_connections:
-            del self.active_connections[user_id]
-        # Remove user from all subscriptions
-        for request_id, users in self.request_subscriptions.items():
-            if user_id in users:
-                users.remove(user_id)
-        logger.info(f"User {user_id} disconnected. Total connections: {len(self.active_connections)}")
-
-    async def send_personal_message(self, message: str, user_id: str):
-        if user_id in self.active_connections:
-            try:
-                await self.active_connections[user_id].send_text(message)
-            except Exception as e:
-                logger.error(f"Error sending message to user {user_id}: {e}")
-                self.disconnect(user_id)
-
-    async def broadcast_to_subscribers(self, request_id: str, message: str):
-        if request_id in self.request_subscriptions:
-            for user_id in self.request_subscriptions[request_id]:
-                await self.send_personal_message(message, user_id)
-
-    async def broadcast_new_request(self, message: str):
-        """Broadcast new request to all connected users"""
-        disconnected_users = []
-        for user_id, websocket in self.active_connections.items():
-            try:
-                await websocket.send_text(message)
-            except Exception as e:
-                logger.error(f"Error broadcasting to user {user_id}: {e}")
-                disconnected_users.append(user_id)
-        
-        # Clean up disconnected users
-        for user_id in disconnected_users:
-            self.disconnect(user_id)
-
-    def subscribe_to_request(self, user_id: str, request_id: str):
-        if request_id not in self.request_subscriptions:
-            self.request_subscriptions[request_id] = []
-        if user_id not in self.request_subscriptions[request_id]:
-            self.request_subscriptions[request_id].append(user_id)
-
-    def unsubscribe_from_request(self, user_id: str, request_id: str):
-        if request_id in self.request_subscriptions and user_id in self.request_subscriptions[request_id]:
-            self.request_subscriptions[request_id].remove(user_id)
-
-manager = ConnectionManager()
 
 # Models
 class LocationUpdate(BaseModel):
@@ -166,73 +106,6 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-# WebSocket endpoint with improved CORS handling
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    # Accept the connection first
-    await websocket.accept()
-    
-    user_id = None
-    try:
-        # Wait for authentication message from client
-        data = await websocket.receive_text()
-        message_data = json.loads(data)
-        
-        if message_data.get("type") == "auth":
-            token = message_data.get("token")
-            if not token:
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                return
-            
-            try:
-                # Validate the token
-                user = supabase.auth.get_user(token).user
-                if not user:
-                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                    return
-                    
-                user_id = user.id
-                await manager.connect(websocket, user_id)
-                
-                # Send authentication success
-                await websocket.send_text(json.dumps({
-                    "type": "auth_success",
-                    "user_id": user_id
-                }))
-                
-                # Main message loop
-                while True:
-                    data = await websocket.receive_text()
-                    try:
-                        message_data = json.loads(data)
-                        if message_data.get("type") == "subscribe":
-                            request_id = message_data.get("request_id")
-                            if request_id:
-                                manager.subscribe_to_request(user_id, request_id)
-                                await websocket.send_text(json.dumps({
-                                    "type": "subscription_success",
-                                    "request_id": request_id
-                                }))
-                    except json.JSONDecodeError:
-                        # Ignore non-JSON messages
-                        pass
-                    except Exception as e:
-                        logger.error(f"Error processing WebSocket message: {e}")
-                        
-            except Exception as e:
-                logger.error(f"WebSocket authentication failed: {e}")
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                return
-                
-    except WebSocketDisconnect:
-        if user_id:
-            manager.disconnect(user_id)
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-        if user_id:
-            manager.disconnect(user_id)
-        await websocket.close()
-
 # Helper functions
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371  # Earth radius in kilometers
@@ -264,7 +137,16 @@ def get_address_from_coordinates(lat: float, lng: float) -> str:
 # REST Endpoints
 @app.get("/")
 async def root():
-    return {"message": "Cash Exchange API", "version": "1.0.0", "websocket_support": True}
+    return {"message": "Cash Exchange API", "version": "2.0.0", "realtime_method": "http_polling"}
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "2.0.0"
+    }
 
 @app.get("/api/user/me", response_model=UserResponse)
 async def get_current_user_profile(current_user = Depends(get_current_user)):
@@ -317,7 +199,8 @@ async def update_user_location(
 @app.get("/api/requests/nearby", response_model=List[RequestResponse])
 async def get_nearby_requests(
     current_user = Depends(get_current_user),
-    radius: float = 5.0
+    radius: float = 5.0,
+    since: Optional[str] = None  # ISO timestamp for incremental updates
 ):
     try:
         logger.info(f"Getting nearby requests for user {current_user.id} within {radius}km")
@@ -336,19 +219,30 @@ async def get_nearby_requests(
                 detail="User location not set. Please enable location services and update your location."
             )
         
-        requests_result = supabase.table("requests").select("*").eq("status", "pending").execute()
+        # Build query - only get pending requests, exclude own requests
+        query = supabase.table("requests").select("*").eq("status", "pending").neq("user_id", current_user.id)
+        
+        # Add time filter for incremental updates
+        if since:
+            try:
+                since_datetime = datetime.fromisoformat(since.replace('Z', '+00:00'))
+                query = query.gte("created_at", since_datetime.isoformat())
+            except ValueError:
+                # Invalid timestamp format, ignore the filter
+                pass
+        
+        requests_result = query.execute()
         
         nearby_requests = []
         for req in requests_result.data:
-            if req["user_id"] != current_user.id:
-                distance = calculate_distance(
-                    user_lat, user_lon,
-                    req["latitude"], req["longitude"]
-                )
-                if distance <= radius:
-                    req_with_distance = req.copy()
-                    req_with_distance['distance_km'] = distance
-                    nearby_requests.append(req_with_distance)
+            distance = calculate_distance(
+                user_lat, user_lon,
+                req["latitude"], req["longitude"]
+            )
+            if distance <= radius:
+                req_with_distance = req.copy()
+                req_with_distance['distance_km'] = distance
+                nearby_requests.append(req_with_distance)
         
         nearby_requests.sort(key=lambda x: x['distance_km'])
         logger.info(f"Found {len(nearby_requests)} nearby requests for user {current_user.id}")
@@ -359,6 +253,51 @@ async def get_nearby_requests(
     except Exception as e:
         logger.error(f"Error getting nearby requests: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/api/requests/recent", response_model=List[RequestResponse])
+async def get_recent_requests(
+    current_user = Depends(get_current_user),
+    minutes: int = 5  # Get requests from last N minutes
+):
+    """Get recently created requests for polling updates"""
+    try:
+        since_time = datetime.utcnow() - timedelta(minutes=minutes)
+        
+        user_profile = supabase.table("profiles").select("*").eq("id", current_user.id).execute()
+        if not user_profile.data:
+            raise HTTPException(status_code=404, detail="User profile not found")
+        
+        profile = user_profile.data[0]
+        user_lat = profile.get("latitude", 0)
+        user_lon = profile.get("longitude", 0)
+        
+        if user_lat == 0 or user_lon == 0:
+            return []  # Return empty if no location
+        
+        # Get recent requests
+        requests_result = supabase.table("requests").select("*")\
+            .eq("status", "pending")\
+            .neq("user_id", current_user.id)\
+            .gte("created_at", since_time.isoformat())\
+            .execute()
+        
+        nearby_requests = []
+        for req in requests_result.data:
+            distance = calculate_distance(
+                user_lat, user_lon,
+                req["latitude"], req["longitude"]
+            )
+            if distance <= 5.0:  # 5km radius
+                req_with_distance = req.copy()
+                req_with_distance['distance_km'] = distance
+                nearby_requests.append(req_with_distance)
+        
+        nearby_requests.sort(key=lambda x: x['distance_km'])
+        return nearby_requests
+        
+    except Exception as e:
+        logger.error(f"Error getting recent requests: {e}")
+        return []
 
 @app.post("/api/requests", response_model=RequestResponse, status_code=201)
 async def create_request(
@@ -447,15 +386,7 @@ async def create_request(
         
         logger.info(f"Request created successfully: {result.data}")
         
-        # Broadcast new request to all connected clients via WebSocket
-        broadcast_message = {
-            "type": "new_request",
-            "data": result.data[0],
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-        await manager.broadcast_new_request(json.dumps(broadcast_message))
-        
+        # No WebSocket broadcast needed - clients will poll for updates
         return result.data[0]
         
     except HTTPException:
@@ -483,17 +414,8 @@ async def accept_request(
         if not result.data:
             raise HTTPException(status_code=404, detail="Request not found")
         
-        # Notify subscribers via WebSocket
-        broadcast_message = {
-            "type": "request_accepted",
-            "data": result.data[0],
-            "accepted_by": current_user.id,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-        await manager.broadcast_to_subscribers(request_id, json.dumps(broadcast_message))
-        
-        return {"message": "Request accepted successfully"}
+        # No WebSocket broadcast needed
+        return {"message": "Request accepted successfully", "data": result.data[0]}
     except HTTPException:
         raise
     except Exception as e:
@@ -514,17 +436,8 @@ async def complete_request(
         if not result.data:
             raise HTTPException(status_code=404, detail="Request not found")
         
-        # Notify subscribers via WebSocket
-        broadcast_message = {
-            "type": "request_completed",
-            "data": result.data[0],
-            "completed_by": current_user.id,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-        await manager.broadcast_to_subscribers(request_id, json.dumps(broadcast_message))
-        
-        return {"message": "Request completed successfully"}
+        # No WebSocket broadcast needed
+        return {"message": "Request completed successfully", "data": result.data[0]}
     except HTTPException:
         raise
     except Exception as e:
@@ -537,14 +450,8 @@ async def get_route(
     start_lng: float,
     end_lat: float,
     end_lng: float,
-    authorization: str = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Authorization header required")
-    
-    token = authorization[7:]
-    await get_current_user(token)  # Validate token
-    
     try:
         response = requests.get(
             f"https://graphhopper.com/api/1/route?"
@@ -567,22 +474,11 @@ async def get_route(
             detail=f"Error getting route: {str(e)}"
         )
 
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "active_connections": len(manager.active_connections)
-    }
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         app, 
         host="0.0.0.0", 
         port=8000,
-        ws_ping_interval=20,
-        ws_ping_timeout=20,
         timeout_keep_alive=30,
     )

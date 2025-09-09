@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 
 class ProfileScreen extends StatelessWidget {
+  const ProfileScreen({super.key});
   @override
   Widget build(BuildContext context) {
     final authService = Provider.of<AuthService>(context);
@@ -28,7 +29,9 @@ class ProfileScreen extends StatelessWidget {
                     ListTile(
                       leading: Icon(Icons.person),
                       title: Text('Name'),
-                      subtitle: Text(user.userMetadata?['name'] ?? 'Not provided'),
+                      subtitle: Text(
+                        user.userMetadata?['name'] ?? 'Not provided',
+                      ),
                     ),
                     ListTile(
                       leading: Icon(Icons.email),

@@ -1,34 +1,38 @@
 // screens/home_screen.dart
 import 'package:flutter/material.dart';
+import 'package:payswap/services/request_polling_service.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/location_service.dart';
-import '../services/websocket_service.dart';
 import 'map_screen.dart';
 import 'request_screen.dart';
 import 'profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
   @override
+  // ignore: library_private_types_in_public_api
   _HomeScreenState createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
-  final List<Widget> _screens = [
-    MapScreen(),
-    RequestScreen(),
-    ProfileScreen(),
-  ];
+  final List<Widget> _screens = [MapScreen(), RequestScreen(), ProfileScreen()];
 
   @override
   void initState() {
     super.initState();
     // Initialize services when home screen loads
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final locationService = Provider.of<LocationService>(context, listen: false);
-      final webSocketService = Provider.of<WebSocketService>(context, listen: false);
-      
+      final locationService = Provider.of<LocationService>(
+        context,
+        listen: false,
+      );
+      final pollingService = Provider.of<RequestPollingService>( // FIX: Define pollingService variable
+        context,
+        listen: false,
+      );
+
       // Get current location
       try {
         await locationService.getCurrentLocation();
@@ -43,30 +47,42 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         }
       }
-      
-      // Connect to WebSocket
-      _connectToWebSocket();
-      
-      // Listen for WebSocket connection state changes
-      webSocketService.addListener(_handleWebSocketStateChange);
+
+      // Start polling
+      await _startPolling();
+
+      // Listen for polling state changes
+      pollingService.addListener(_handlePollingStateChange); // FIX: Now pollingService is defined
     });
   }
-  
-  void _connectToWebSocket() async {
-    if (!mounted) return;
-    
-    final webSocketService = Provider.of<WebSocketService>(context, listen: false);
-    
+
+  Future<void> _startPolling() async {
     try {
-      // First check if server is available
-      final isAvailable = await webSocketService.isServerAvailable();
+      final pollingService = Provider.of<RequestPollingService>(
+        context,
+        listen: false,
+      );
+
+      // Check if server is available first
+      final isAvailable = await pollingService.isServerAvailable();
       if (!isAvailable) {
-        throw Exception('Server is not available. Please check your internet connection.');
+        throw Exception(
+          'Server is not available. Please check your internet connection.',
+        );
       }
+
+      await pollingService.startPolling();
       
-      await webSocketService.connect();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Connected to updates'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
     } catch (e) {
-      debugPrint('WebSocket connection error: $e');
+      debugPrint('Polling error: $e');
       if (mounted) {
         // Show error message to user
         ScaffoldMessenger.of(context).showSnackBar(
@@ -76,24 +92,27 @@ class _HomeScreenState extends State<HomeScreen> {
             duration: Duration(seconds: 5),
             action: SnackBarAction(
               label: 'Retry',
-              onPressed: _connectToWebSocket,
+              onPressed: _startPolling,
             ),
           ),
         );
       }
     }
   }
-  
-  void _handleWebSocketStateChange() {
+
+  void _handlePollingStateChange() {
     if (!mounted) return;
-    
-    final webSocketService = Provider.of<WebSocketService>(context, listen: false);
+
+    final pollingService = Provider.of<RequestPollingService>(
+      context,
+      listen: false,
+    );
     
     // Show connection status to user
-    if (webSocketService.isConnected) {
+    if (pollingService.isPolling) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Connected to real-time updates'),
+          content: Text('Connected to updates'),
           backgroundColor: Colors.green,
         ),
       );
@@ -102,12 +121,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
-    final webSocketService = Provider.of<WebSocketService>(context, listen: false);
-    webSocketService.removeListener(_handleWebSocketStateChange);
-    
-    final locationService = Provider.of<LocationService>(context, listen: false);
+    final pollingService = Provider.of<RequestPollingService>(
+      context,
+      listen: false,
+    );
+    pollingService.removeListener(_handlePollingStateChange);
+    pollingService.stopPolling();
+
+    final locationService = Provider.of<LocationService>(
+      context,
+      listen: false,
+    );
     locationService.stopLiveTracking();
-    
+
     super.dispose();
   }
 
@@ -138,18 +164,12 @@ class _HomeScreenState extends State<HomeScreen> {
           });
         },
         items: [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.map),
-            label: 'Map',
-          ),
+          BottomNavigationBarItem(icon: Icon(Icons.map), label: 'Map'),
           BottomNavigationBarItem(
             icon: Icon(Icons.request_page),
             label: 'Requests',
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person),
-            label: 'Profile',
-          ),
+          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
         ],
       ),
     );
@@ -180,10 +200,7 @@ class _HomeScreenState extends State<HomeScreen> {
             SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32.0),
-              child: Text(
-                authService.error,
-                textAlign: TextAlign.center,
-              ),
+              child: Text(authService.error, textAlign: TextAlign.center),
             ),
             SizedBox(height: 16),
             ElevatedButton(
@@ -195,7 +212,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   // The auth service will automatically reinitialize itself
                 } catch (e) {
                   // Handle any errors during logout
-                  print('Error during logout: $e');
                 }
               },
               child: Text('Retry'),
@@ -219,10 +235,7 @@ class _HomeScreenState extends State<HomeScreen> {
             SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32.0),
-              child: Text(
-                locationService.error,
-                textAlign: TextAlign.center,
-              ),
+              child: Text(locationService.error, textAlign: TextAlign.center),
             ),
             SizedBox(height: 16),
             ElevatedButton(

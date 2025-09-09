@@ -180,11 +180,6 @@ class AuthService with ChangeNotifier {
     
     try {
       // Check if profile exists
-      final response = await _supabase
-          .from('profiles')
-          .select('id')
-          .eq('id', _currentUser!.id)
-          .single();
       
       debugPrint('Profile exists for user: ${_currentUser!.email}');
     } catch (e) {
