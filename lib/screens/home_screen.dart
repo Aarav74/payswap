@@ -1,8 +1,10 @@
+// screens/home_screen.dart (Updated with new logo)
 import 'package:flutter/material.dart';
 import 'package:payswap/services/request_polling_service.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/location_service.dart';
+import '../widgets/animated_logo.dart'; // Import the new logo widget
 import 'map_screen.dart';
 import 'request_screen.dart';
 import 'profile_screen.dart';
@@ -16,7 +18,9 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   int _currentIndex = 0;
   late AnimationController _statusAnimationController;
+  late AnimationController _logoSpinController;
   late Animation<double> _pulseAnimation;
+  late Animation<double> _logoSpinAnimation;
   
   late final List<Widget> _screens;
 
@@ -29,8 +33,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       vsync: this,
     )..repeat(reverse: true);
     
+    _logoSpinController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+    
     _pulseAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
       CurvedAnimation(parent: _statusAnimationController, curve: Curves.easeInOut),
+    );
+    
+    _logoSpinAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _logoSpinController, curve: Curves.elasticOut),
     );
     
     // Initialize screens
@@ -175,9 +188,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  void _onLogoTap() {
+    // Trigger logo animation
+    _logoSpinController.forward().then((_) {
+      _logoSpinController.reset();
+    });
+    
+    // Show fun message
+    _showStatusSnackBar(
+      'PaySwap - Making money exchange easier!',
+      Colors.blue.shade600,
+    );
+  }
+
   @override
   void dispose() {
     _statusAnimationController.dispose();
+    _logoSpinController.dispose();
     final pollingService = Provider.of<RequestPollingService>(context, listen: false);
     pollingService.removeListener(_handlePollingStateChange);
     pollingService.stopPolling();
@@ -235,6 +262,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              AnimatedPaySwapLogo(
+                size: 100,
+                primaryColor: Theme.of(context).primaryColor,
+                enableTapAnimation: false,
+              ),
+              SizedBox(height: 32),
               CircularProgressIndicator(),
               SizedBox(height: 16),
               Text(
@@ -267,27 +300,43 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       foregroundColor: Colors.white,
       title: Row(
         children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(
-              Icons.swap_horizontal_circle,
-              color: Colors.white,
-              size: 20,
-            ),
+          // Use the new animated logo
+          AnimatedBuilder(
+            animation: _logoSpinAnimation,
+            builder: (context, child) {
+              return Transform.rotate(
+                angle: _logoSpinAnimation.value * 2 * 3.14159,
+                child: AnimatedPaySwapLogo(
+                  size: 32,
+                  primaryColor: Colors.white,
+                  secondaryColor: Theme.of(context).primaryColor,
+                  onTap: _onLogoTap,
+                ),
+              );
+            },
           ),
           SizedBox(width: 12),
-          Text(
-            'PaySwap',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              fontSize: 20,
-              letterSpacing: 0.5,
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'PaySwap',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              Text(
+                'Money Exchange',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Colors.white.withOpacity(0.8),
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -422,6 +471,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             padding: EdgeInsets.all(20),
             child: Column(
               children: [
+                // Add logo to the sheet header
+                AnimatedPaySwapLogo(
+                  size: 60,
+                  primaryColor: Theme.of(context).primaryColor,
+                  onTap: _onLogoTap,
+                ),
+                SizedBox(height: 16),
                 Text(
                   'Quick Actions',
                   style: TextStyle(
@@ -476,7 +532,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Confirm Logout'),
+        title: Row(
+          children: [
+            AnimatedPaySwapLogo(
+              size: 32,
+              primaryColor: Theme.of(context).primaryColor,
+            ),
+            SizedBox(width: 12),
+            Text('Confirm Logout'),
+          ],
+        ),
         content: Text('Are you sure you want to logout?'),
         actions: [
           TextButton(
