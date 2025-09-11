@@ -1,0 +1,66 @@
+// screens/profile_screen.dart - Enhanced version
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show User;
+import '../services/auth_service.dart';
+
+// ... [Previous code remains the same until the HelpSupportScreen]
+
+class HelpSupportScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Help & Support'),
+        backgroundColor: Theme.of(context).primaryColor,
+        foregroundColor: Colors.white,
+      ),
+      body: Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Card(
+              child: ListTile(
+                leading: Icon(Icons.help, color: Colors.blue),
+                title: Text('FAQ'),
+                subtitle: Text('Frequently asked questions'),
+                trailing: Icon(Icons.chevron_right),
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('FAQ section coming soon!')),
+                  );
+                },
+              ),
+            ),
+            Card(
+              child: ListTile(
+                leading: Icon(Icons.support_agent, color: Colors.green),
+                title: Text('Contact Support'),
+                subtitle: Text('Get help from our team'),
+                trailing: Icon(Icons.chevron_right),
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Contact support feature coming soon!')),
+                  );
+                },
+              ),
+            ),
+            Card(
+              child: ListTile(
+                leading: Icon(Icons.bug_report, color: Colors.orange),
+                title: Text('Report a Bug'),
+                subtitle: Text('Help us improve the app'),
+                trailing: Icon(Icons.chevron_right),
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Bug report feature coming soon!')),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
