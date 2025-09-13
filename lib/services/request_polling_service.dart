@@ -7,7 +7,7 @@ import 'auth_service.dart';
 import '../models/request_model.dart';
 
 class RequestPollingService with ChangeNotifier {
-  static const String _httpBaseUrl = 'http://192.168.4.147:8000';
+  static const String _httpBaseUrl = 'http://192.168.1.3:8000';
   
   final AuthService _authService;
   Timer? _pollingTimer;

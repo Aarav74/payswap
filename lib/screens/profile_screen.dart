@@ -1,4 +1,3 @@
-// screens/profile_screen.dart - Enhanced version
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show User;
@@ -17,15 +16,13 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
   
-  // Profile edit state
   bool _isEditing = false;
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
   
-  // Payment methods list
   List<PaymentMethod> _paymentMethods = [];
   
-  // Transaction history list
+
   List<Transaction> _transactions = [];
 
   @override
