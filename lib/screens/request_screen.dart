@@ -258,9 +258,9 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          prefixText: '\$ ',
+                          prefixText: '\₹ ',
                           prefixIcon: Icon(Icons.attach_money),
-                          hintText: 'Enter amount (e.g., 100.00)',
+                          hintText: 'Enter amount (e.g., 100)',
                         ),
                       ),
                       SizedBox(height: 16),
@@ -623,7 +623,7 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
 
     if (amount > 10000) {
       setState(() {
-        _error = 'Amount cannot exceed \$10,000';
+        _error = 'Amount cannot exceed ₹10,000';
       });
       return;
     }
