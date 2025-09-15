@@ -7,7 +7,8 @@ import 'auth_service.dart';
 import '../models/request_model.dart';
 
 class RequestPollingService with ChangeNotifier {
-  static const String _httpBaseUrl = 'http://192.168.1.3:8000';
+  // Use 10.0.2.2 for Android emulator, 192.168.1.3 for physical device
+  static const String _httpBaseUrl = 'http://10.0.2.2:8000';
   
   final AuthService _authService;
   Timer? _pollingTimer;
@@ -27,18 +28,71 @@ class RequestPollingService with ChangeNotifier {
   String? get error => _error;
   bool get hasData => _requests.isNotEmpty;
   
-  // Check if server is available
+  // Check if server is available - improved version
   Future<bool> isServerAvailable() async {
     try {
+      debugPrint('Checking server availability at: $_httpBaseUrl/health');
       final response = await http.get(
         Uri.parse('$_httpBaseUrl/health'),
         headers: {'Content-Type': 'application/json'},
-      ).timeout(Duration(seconds: 5));
-      return response.statusCode == 200;
+      ).timeout(Duration(seconds: 10));
+      
+      debugPrint('Server health check response: ${response.statusCode}');
+      
+      // Accept more status codes as "available"
+      return response.statusCode >= 200 && response.statusCode < 500;
     } catch (e) {
       debugPrint('Server health check failed: $e');
       return false;
     }
+  }
+  
+  // Basic connectivity test as fallback
+  Future<bool> isServerReachable() async {
+    try {
+      debugPrint('Testing basic server connectivity...');
+      final response = await http.get(
+        Uri.parse('$_httpBaseUrl/'),
+        headers: {'Content-Type': 'application/json'},
+      ).timeout(Duration(seconds: 8));
+      
+      debugPrint('Basic connectivity test: ${response.statusCode}');
+      return true; // If we get any response, server is reachable
+    } catch (e) {
+      debugPrint('Basic connectivity test failed: $e');
+      return false;
+    }
+  }
+  
+  // Test multiple connection methods
+  Future<Map<String, bool>> testConnectivity() async {
+    final results = <String, bool>{};
+    
+    // Test health endpoint
+    results['health'] = await isServerAvailable();
+    
+    // Test root endpoint
+    results['root'] = await isServerReachable();
+    
+    // Test requests endpoint
+    try {
+      final token = await _authService.getToken();
+      if (token != null) {
+        final response = await http.get(
+          Uri.parse('$_httpBaseUrl/requests/nearby'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+        ).timeout(Duration(seconds: 8));
+        results['requests'] = response.statusCode < 500;
+      }
+    } catch (e) {
+      results['requests'] = false;
+    }
+    
+    debugPrint('Connectivity test results: $results');
+    return results;
   }
   
   // Start polling for requests
@@ -97,8 +151,10 @@ class RequestPollingService with ChangeNotifier {
 
       final token = await _authService.getToken();
       if (token == null) {
-        throw Exception('Not authenticated');
+        throw Exception('Not authenticated - please log in again');
       }
+
+      debugPrint('Creating request: amount=$amount, type=$type, lat=$latitude, lng=$longitude');
 
       final response = await http.post(
         Uri.parse('$_httpBaseUrl/requests'),
@@ -112,7 +168,10 @@ class RequestPollingService with ChangeNotifier {
           'latitude': latitude,
           'longitude': longitude,
         }),
-      );
+      ).timeout(Duration(seconds: 15));
+
+      debugPrint('Create request response: ${response.statusCode}');
+      debugPrint('Response body: ${response.body}');
 
       if (response.statusCode == 201) {
         final data = jsonDecode(response.body);
@@ -122,8 +181,15 @@ class RequestPollingService with ChangeNotifier {
         notifyListeners();
         return request;
       } else {
-        final error = jsonDecode(response.body)['error'] ?? 'Failed to create request';
-        throw Exception(error);
+        String errorMessage = 'Failed to create request';
+        try {
+          final errorData = jsonDecode(response.body);
+          errorMessage = errorData['error'] ?? errorMessage;
+        } catch (e) {
+          // If JSON decode fails, use status code
+          errorMessage = 'Server error (${response.statusCode})';
+        }
+        throw Exception(errorMessage);
       }
     } catch (e) {
       _error = e.toString();
@@ -199,7 +265,7 @@ class RequestPollingService with ChangeNotifier {
         }
         
       } else if (response.statusCode == 401) {
-        _error = 'Authentication expired';
+        _error = 'Authentication expired - please log in again';
         debugPrint('Authentication error: ${response.statusCode}');
         if (isInitial || forceRefresh) notifyListeners();
       } else {
@@ -209,7 +275,17 @@ class RequestPollingService with ChangeNotifier {
       }
       
     } catch (e) {
-      _error = 'Network error: ${e.toString()}';
+      String errorMsg = 'Network error';
+      
+      if (e.toString().contains('TimeoutException') || e.toString().contains('timeout')) {
+        errorMsg = 'Connection timeout - check your internet connection';
+      } else if (e.toString().contains('SocketException') || e.toString().contains('Connection refused')) {
+        errorMsg = 'Cannot reach server - check server is running';
+      } else {
+        errorMsg = 'Network error: ${e.toString()}';
+      }
+      
+      _error = errorMsg;
       debugPrint('Polling error: $e');
       
       // Only notify on errors for initial fetch or manual refresh

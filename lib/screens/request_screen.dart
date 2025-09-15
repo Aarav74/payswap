@@ -20,7 +20,7 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
   String _selectedType = 'Need Cash';
   bool _isLoading = false;
   String _error = '';
-  
+  bool _serverConnected = false;
   
   @override
   bool get wantKeepAlive => true;
@@ -29,7 +29,7 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _startPolling();
+      _initializeScreen();
     });
   }
 
@@ -39,21 +39,131 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
     super.dispose();
   }
 
+  Future<void> _initializeScreen() async {
+    debugPrint('=== Initializing Request Screen ===');
+    await _testServerConnection();
+    await _startPolling();
+  }
+
+  Future<void> _testServerConnection() async {
+    final pollingService = Provider.of<RequestPollingService>(context, listen: false);
+    
+    debugPrint('Testing server connectivity...');
+    
+    // Test multiple connection methods
+    final connectivityResults = await pollingService.testConnectivity();
+    
+    bool isConnected = connectivityResults.values.any((result) => result == true);
+    
+    setState(() {
+      _serverConnected = isConnected;
+    });
+    
+    if (!isConnected && mounted) {
+      _showConnectionError(connectivityResults);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.white, size: 20),
+              SizedBox(width: 8),
+              Text('Connected to server'),
+            ],
+          ),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
+    }
+  }
+
+  void _showConnectionError(Map<String, bool> results) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.warning, color: Colors.orange),
+              SizedBox(width: 8),
+              Text('Connection Issue'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Unable to connect to server properly.'),
+              SizedBox(height: 16),
+              Text('Connection Tests:', style: TextStyle(fontWeight: FontWeight.bold)),
+              SizedBox(height: 8),
+              ...results.entries.map((entry) => Padding(
+                padding: EdgeInsets.only(bottom: 4),
+                child: Row(
+                  children: [
+                    Icon(
+                      entry.value ? Icons.check_circle : Icons.cancel,
+                      color: entry.value ? Colors.green : Colors.red,
+                      size: 16,
+                    ),
+                    SizedBox(width: 8),
+                    Text('${entry.key}: ${entry.value ? "OK" : "Failed"}'),
+                  ],
+                ),
+              )),
+              SizedBox(height: 16),
+              Text(
+                'Troubleshooting:\n'
+                '• Check if server is running on port 8000\n'
+                '• Verify network connection\n'
+                '• For emulator use: 10.0.2.2:8000\n'
+                '• For device use your computer\'s IP',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _testServerConnection();
+              },
+              child: Text('Retry'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('Continue Anyway'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _startPolling() async {
     final pollingService = Provider.of<RequestPollingService>(context, listen: false);
     
-    final isAvailable = await pollingService.isServerAvailable();
-    if (!isAvailable && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Unable to connect to server. Please check your internet connection.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
+    debugPrint('Starting polling service...');
     
-    await pollingService.startPolling(interval: Duration(seconds: 15));
+    try {
+      await pollingService.startPolling(interval: Duration(seconds: 15));
+      debugPrint('Polling started successfully');
+    } catch (e) {
+      debugPrint('Error starting polling: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Warning: Auto-refresh may not work properly'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
   
   Future<void> _refreshRequests() async {
@@ -75,11 +185,6 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
     
     final allRequests = pollingService.requests;
     
-    // Show loading state if needed
-    if (_isLoading) {
-      return Center(child: CircularProgressIndicator());
-    }
-    
     return Scaffold(
       body: RefreshIndicator(
         onRefresh: _handleRefresh,
@@ -87,6 +192,35 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
           padding: const EdgeInsets.all(16.0),
           child: Column(
             children: [
+              // Connection Status Banner
+              if (!_serverConnected)
+                Container(
+                  width: double.infinity,
+                  padding: EdgeInsets.all(12),
+                  margin: EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.1),
+                    border: Border.all(color: Colors.orange),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning, color: Colors.orange, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Limited connectivity - some features may not work',
+                          style: TextStyle(color: Colors.orange[800], fontSize: 12),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _testServerConnection,
+                        child: Text('Retry', style: TextStyle(fontSize: 12)),
+                      ),
+                    ],
+                  ),
+                ),
+              
               // Create Request Card
               Card(
                 elevation: 4,
@@ -110,6 +244,9 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
                               color: Theme.of(context).primaryColor
                             ),
                           ),
+                          Spacer(),
+                          if (!_serverConnected)
+                            Icon(Icons.warning, color: Colors.orange, size: 16),
                         ],
                       ),
                       SizedBox(height: 16),
@@ -178,6 +315,10 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
                                   _error,
                                   style: TextStyle(color: Colors.red, fontSize: 14),
                                 ),
+                              ),
+                              IconButton(
+                                icon: Icon(Icons.close, size: 16, color: Colors.red),
+                                onPressed: () => setState(() => _error = ''),
                               ),
                             ],
                           ),
@@ -275,6 +416,27 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
                             ],
                           ),
                         ),
+                      if (!_serverConnected)
+                        Container(
+                          margin: EdgeInsets.only(left: 4),
+                          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.signal_wifi_off, color: Colors.orange, size: 12),
+                              SizedBox(width: 2),
+                              Text(
+                                'Offline',
+                                style: TextStyle(color: Colors.orange, fontSize: 10),
+                              ),
+                            ],
+                          ),
+                        ),
                       Spacer(),
                       if (pollingService.isLoading)
                         SizedBox(
@@ -284,7 +446,10 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
                         ),
                       IconButton(
                         icon: Icon(Icons.refresh),
-                        onPressed: pollingService.isLoading ? null : _refreshRequests,
+                        onPressed: pollingService.isLoading ? null : () async {
+                          await _refreshRequests();
+                          await _testServerConnection();
+                        },
                         tooltip: 'Refresh requests',
                       ),
                     ],
@@ -347,14 +512,25 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
                   style: TextStyle(color: Colors.red[700]),
                 ),
                 SizedBox(height: 16),
-                ElevatedButton.icon(
-                  onPressed: _refreshRequests,
-                  icon: Icon(Icons.refresh),
-                  label: Text('Try Again'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                    foregroundColor: Colors.white,
-                  ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: _refreshRequests,
+                      icon: Icon(Icons.refresh),
+                      label: Text('Retry'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: _testServerConnection,
+                      icon: Icon(Icons.settings_ethernet),
+                      label: Text('Test Connection'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -417,6 +593,12 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
   Future<void> _createRequest(RequestPollingService pollingService, LocationService locationService, AuthService authService) async {
     debugPrint('=== Starting _createRequest ===');
     
+    // Clear previous error
+    setState(() {
+      _error = '';
+    });
+    
+    // Validation checks
     if (authService.currentUser == null) {
       setState(() {
         _error = 'Please login to create a request';
@@ -446,6 +628,7 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
       return;
     }
 
+    // Start loading
     setState(() {
       _isLoading = true;
       _error = '';
@@ -453,26 +636,79 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
 
     try {
       debugPrint('Getting current location...');
-      await locationService.getCurrentLocation().timeout(Duration(seconds: 10));
+      
+      // Show location loading message
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                ),
+                SizedBox(width: 12),
+                Text('Getting your location...'),
+              ],
+            ),
+            backgroundColor: Colors.blue,
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        );
+      }
+      
+      await locationService.getCurrentLocation().timeout(Duration(seconds: 15));
       
       if (locationService.latitude == null || locationService.longitude == null) {
-        throw Exception('Could not get your current location. Please check your location settings.');
+        throw Exception('Could not get your current location. Please check your location settings and try again.');
       }
 
       debugPrint('Location obtained: ${locationService.latitude}, ${locationService.longitude}');
 
-      // Map display type to API type - FIXED: Use the exact values the backend expects
+      // Map display type to API type
       String requestType = _selectedType == 'Need Cash' ? 'cash' : 'online';
       
       debugPrint('Creating request via polling service...');
+      debugPrint('Request details: amount=$amount, type=$requestType');
+      
+      // Show creation loading message
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                ),
+                SizedBox(width: 12),
+                Text('Creating your request...'),
+              ],
+            ),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 5),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        );
+      }
+      
       final request = await pollingService.createRequest(
         amount: amount,
-        type: requestType, // Send the correct type that backend expects
+        type: requestType,
         latitude: locationService.latitude!,
         longitude: locationService.longitude!,
-      ).timeout(Duration(seconds: 15));
+      ).timeout(Duration(seconds: 20));
 
       if (request != null) {
+        // Success - clear form
         _amountController.clear();
         setState(() {
           _selectedType = 'Need Cash';
@@ -480,6 +716,7 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
         });
         
         if (mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Row(
@@ -487,20 +724,35 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
                   Icon(Icons.check_circle, color: Colors.white),
                   SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      'Request created successfully! (\$${amount.toStringAsFixed(2)})',
-                      style: TextStyle(fontWeight: FontWeight.w500),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Request created successfully!',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          '\${amount.toStringAsFixed(2)} - ${_selectedType}',
+                          style: TextStyle(fontSize: 12, color: Colors.white70),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
               backgroundColor: Colors.green,
-              duration: Duration(seconds: 3),
+              duration: Duration(seconds: 4),
               behavior: SnackBarBehavior.floating,
+              margin: EdgeInsets.all(16),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
           );
         }
+        
+        // Refresh the connection status
+        await _testServerConnection();
+        
       } else {
         throw Exception('Failed to create request - no response received from server');
       }
@@ -511,6 +763,10 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
         _error = 'Request timed out. Please check your internet connection and try again.';
       });
       
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      }
+      
     } catch (e) {
       debugPrint('Error in _createRequest: $e');
       
@@ -520,20 +776,56 @@ class _RequestScreenState extends State<RequestScreen> with AutomaticKeepAliveCl
         errorMessage = errorMessage.substring(11);
       }
       
+      // Categorize errors for better user experience
       if (errorMessage.toLowerCase().contains('location')) {
-        errorMessage = 'Location error. Please enable location services for this app.';
+        errorMessage = 'Location error. Please enable location services and grant permission to this app.';
       } else if (errorMessage.toLowerCase().contains('authentication') || 
-                 errorMessage.toLowerCase().contains('login')) {
+                 errorMessage.toLowerCase().contains('login') ||
+                 errorMessage.toLowerCase().contains('not authenticated')) {
         errorMessage = 'Authentication error. Please log out and log back in.';
       } else if (errorMessage.toLowerCase().contains('network') || 
                  errorMessage.toLowerCase().contains('connection') ||
-                 errorMessage.toLowerCase().contains('timeout')) {
-        errorMessage = 'Network error. Please check your internet connection and try again.';
+                 errorMessage.toLowerCase().contains('timeout') ||
+                 errorMessage.toLowerCase().contains('server') ||
+                 errorMessage.toLowerCase().contains('reach')) {
+        errorMessage = 'Network error. Please check your internet connection and server status.';
+      } else if (errorMessage.toLowerCase().contains('server error')) {
+        errorMessage = 'Server error. Please try again in a moment.';
       }
       
       setState(() {
         _error = errorMessage;
       });
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.error, color: Colors.white),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Failed to create request: ${errorMessage}',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 5),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => _createRequest(pollingService, locationService, authService),
+            ),
+          ),
+        );
+      }
       
     } finally {
       if (mounted) {

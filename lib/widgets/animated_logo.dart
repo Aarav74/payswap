@@ -279,6 +279,7 @@ class PaySwapLogoPainter extends CustomPainter {
     _drawDollarSign(canvas, Offset(radius, 0), radius * 0.3, paint);
   }
   
+  
   void _drawDollarSign(Canvas canvas, Offset center, double size, Paint paint) {
     final textPainter = TextPainter(
       text: TextSpan(
