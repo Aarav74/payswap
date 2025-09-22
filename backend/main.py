@@ -108,7 +108,7 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
 
 # Helper functions
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6371  # Earth radius in kilometers
+    R = 6371 
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
     a = math.sin(dlat/2) * math.sin(dlat/2) + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2) * sin(dlon/2)

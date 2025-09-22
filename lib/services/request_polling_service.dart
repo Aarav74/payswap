@@ -1,4 +1,3 @@
-// services/request_polling_service.dart
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
@@ -7,8 +6,8 @@ import 'auth_service.dart';
 import '../models/request_model.dart';
 
 class RequestPollingService with ChangeNotifier {
-  // Use 10.0.2.2 for Android emulator, 192.168.1.3 for physical device
-  static const String _httpBaseUrl = 'http://192.168.9.147:8000';
+  // Use 10.0.2.2 for Android emulator, your local IP for physical device
+  static const String _httpBaseUrl = 'http://192.168.1.33:8000';
   
   final AuthService _authService;
   Timer? _pollingTimer;
@@ -50,16 +49,36 @@ class RequestPollingService with ChangeNotifier {
   // Basic connectivity test as fallback
   Future<bool> isServerReachable() async {
     try {
-      debugPrint('Testing basic server connectivity...');
-      final response = await http.get(
-        Uri.parse('$_httpBaseUrl/'),
-        headers: {'Content-Type': 'application/json'},
-      ).timeout(Duration(seconds: 8));
+      debugPrint('Testing server connectivity to: $_httpBaseUrl');
       
-      debugPrint('Basic connectivity test: ${response.statusCode}');
-      return true; // If we get any response, server is reachable
+      // Try multiple endpoints for better reliability
+      final endpoints = ['/', '/health', '/api/health'];
+      
+      for (var endpoint in endpoints) {
+        try {
+          final uri = Uri.parse('$_httpBaseUrl$endpoint');
+          debugPrint('Trying endpoint: $uri');
+          
+          final response = await http.get(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+          ).timeout(Duration(seconds: 5));
+          
+          if (response.statusCode >= 200 && response.statusCode < 400) {
+            debugPrint('Successfully connected to $endpoint (${response.statusCode})');
+            return true;
+          }
+          debugPrint('Endpoint $endpoint returned status: ${response.statusCode}');
+        } catch (e) {
+          debugPrint('Error trying $endpoint: $e');
+          // Continue to next endpoint
+        }
+      }
+      
+      debugPrint('All connectivity tests failed');
+      return false;
     } catch (e) {
-      debugPrint('Basic connectivity test failed: $e');
+      debugPrint('Connectivity test failed with error: $e');
       return false;
     }
   }

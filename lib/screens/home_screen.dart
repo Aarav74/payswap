@@ -1,4 +1,4 @@
-// screens/home_screen.dart (Updated with new logo)
+// ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:payswap/services/request_polling_service.dart';
 import 'package:provider/provider.dart';
@@ -12,6 +12,7 @@ import 'profile_screen.dart';
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
   @override
+  // ignore: library_private_types_in_public_api
   _HomeScreenState createState() => _HomeScreenState();
 }
 
@@ -59,17 +60,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
   
-  void _initializeScreens() {
-    if (mounted) {
-      setState(() {
-        _screens = [
-          MapScreen(),
-          RequestScreen(),
-          ProfileScreen(),
-        ];
-      });
-    }
-  }
 
   Future<void> _initializeServices() async {
     final locationService = Provider.of<LocationService>(context, listen: false);
@@ -574,7 +564,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ],
       ),
       child: SafeArea(
-        child: Container(
+        child: SizedBox(
           height: 70,
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,

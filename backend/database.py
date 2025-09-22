@@ -1,4 +1,3 @@
-# backend/database.py
 from supabase import create_client, Client
 import os
 from typing import Optional, Dict, Any, List
